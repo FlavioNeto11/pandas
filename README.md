@@ -56,12 +56,18 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python .\main.py
 python .\main.py --stream --chunk-size 2
+python .\main.py --stream --chunk-size 2 --workers 4 --in-flight 8
 python .\examples_main.py
+```
 
 No modo `--stream`, a pipeline lê arquivos `CSV` e `JSONL` por chunks para reduzir uso de memória.
+Com `--workers > 1`, o processamento dos chunks usa `ThreadPoolExecutor` com escrita ordenada de saída.
+O parâmetro `--in-flight` limita quantos chunks podem ficar em processamento simultâneo (`0` usa valor automático).
 No modo `--stream`, as agregações incrementais (incluindo `total_orders` distintos) usam uma base SQLite temporária em disco ao invés de manter estruturas grandes em memória.
 
-# abrir no VS Code / Jupyter
+### Abrir no VS Code / Jupyter
+
+```powershell
 code .\pandas_aula_completa.ipynb
 ```
 

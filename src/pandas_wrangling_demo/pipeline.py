@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import io
 import sqlite3
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 
-import matplotlib.pyplot as plt
+import matplotlib
 import pandas as pd
 
 from .data_setup import bootstrap_demo_environment
+
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 pd.set_option("display.max_columns", 20)
@@ -16,10 +21,21 @@ pd.set_option("display.width", 120)
 
 
 
-def run_pipeline(base_dir: Path, stream: bool = False, chunk_size: int = 1000) -> dict[str, object]:
+def run_pipeline(
+    base_dir: Path,
+    stream: bool = False,
+    chunk_size: int = 1000,
+    stream_workers: int = 1,
+    in_flight_tasks: int = 0,
+) -> dict[str, object]:
     paths = bootstrap_demo_environment(base_dir)
     if stream:
-        return _run_pipeline_streaming(paths, chunk_size=chunk_size)
+        return _run_pipeline_streaming(
+            paths,
+            chunk_size=chunk_size,
+            stream_workers=stream_workers,
+            in_flight_tasks=in_flight_tasks,
+        )
 
     sales_frames = [
         pd.read_csv(paths["sales_jan_path"]),
@@ -71,7 +87,23 @@ def run_pipeline(base_dir: Path, stream: bool = False, chunk_size: int = 1000) -
     }
 
 
-def _run_pipeline_streaming(paths: dict[str, Path], chunk_size: int) -> dict[str, object]:
+def _run_pipeline_streaming(
+    paths: dict[str, Path],
+    chunk_size: int,
+    stream_workers: int,
+    in_flight_tasks: int,
+) -> dict[str, object]:
+    if stream_workers <= 1:
+        return _run_pipeline_streaming_sequential(paths, chunk_size=chunk_size)
+    return _run_pipeline_streaming_threaded(
+        paths,
+        chunk_size=chunk_size,
+        stream_workers=stream_workers,
+        in_flight_tasks=in_flight_tasks,
+    )
+
+
+def _run_pipeline_streaming_sequential(paths: dict[str, Path], chunk_size: int) -> dict[str, object]:
     customers_df = _read_customers_streaming(paths, chunk_size)
     with sqlite3.connect(paths["database_path"]) as connection:
         returns_df = pd.read_sql_query("SELECT order_id, returned_qty, return_reason FROM returns", connection)
@@ -148,6 +180,143 @@ def _run_pipeline_streaming(paths: dict[str, Path], chunk_size: int) -> dict[str
         "total_revenue": float(total_revenue),
         "output_dir": str(output_dir),
     }
+
+
+def _run_pipeline_streaming_threaded(
+    paths: dict[str, Path],
+    chunk_size: int,
+    stream_workers: int,
+    in_flight_tasks: int,
+) -> dict[str, object]:
+    customers_df = _read_customers_streaming(paths, chunk_size)
+    with sqlite3.connect(paths["database_path"]) as connection:
+        returns_df = pd.read_sql_query("SELECT order_id, returned_qty, return_reason FROM returns", connection)
+
+    output_dir = paths["output_dir"]
+    cleaned_output = output_dir / "cleaned_sales.csv"
+    enriched_output = output_dir / "enriched_sales.csv"
+    _initialize_streaming_outputs(cleaned_output, enriched_output)
+
+    row_count = 0
+    total_revenue = 0.0
+    first_chunk = True
+    inspection_sample: pd.DataFrame | None = None
+
+    aggregate_db_path = output_dir / "stream_aggregate_temp.db"
+    _safe_unlink(aggregate_db_path)
+
+    pending_limit = in_flight_tasks if in_flight_tasks > 0 else max(2, stream_workers * 2)
+
+    with sqlite3.connect(aggregate_db_path) as aggregate_connection:
+        _initialize_distinct_orders_store(aggregate_connection)
+        _initialize_stream_aggregate_store(aggregate_connection)
+
+        chunk_iterator = iter(enumerate(_iter_sales_chunks(paths, chunk_size)))
+        running_futures: dict[Future[tuple[pd.DataFrame, pd.DataFrame]], int] = {}
+        completed_chunks: dict[int, tuple[pd.DataFrame, pd.DataFrame]] = {}
+        next_chunk_to_write = 0
+
+        with ThreadPoolExecutor(max_workers=stream_workers) as executor:
+            while len(running_futures) < pending_limit:
+                try:
+                    chunk_index, sales_chunk = next(chunk_iterator)
+                except StopIteration:
+                    break
+
+                if inspection_sample is None:
+                    inspection_sample = sales_chunk.head(5)
+
+                future = executor.submit(_prepare_streaming_chunk, sales_chunk, customers_df, returns_df)
+                running_futures[future] = chunk_index
+
+            while running_futures:
+                done_futures, _ = wait(set(running_futures.keys()), return_when=FIRST_COMPLETED)
+
+                for done_future in done_futures:
+                    chunk_index = running_futures.pop(done_future)
+                    completed_chunks[chunk_index] = done_future.result()
+
+                while next_chunk_to_write in completed_chunks:
+                    cleaned_chunk, enriched_chunk = completed_chunks.pop(next_chunk_to_write)
+                    next_chunk_to_write += 1
+
+                    if cleaned_chunk.empty:
+                        continue
+
+                    cleaned_chunk.to_csv(cleaned_output, mode="a", index=False, header=first_chunk)
+                    enriched_chunk.to_csv(enriched_output, mode="a", index=False, header=first_chunk)
+                    first_chunk = False
+
+                    row_count += int(len(enriched_chunk))
+                    total_revenue += float(enriched_chunk["realized_revenue"].sum())
+                    _accumulate_streaming_chunk_to_sqlite(aggregate_connection, enriched_chunk)
+                    _store_distinct_orders(aggregate_connection, enriched_chunk)
+
+                while len(running_futures) < pending_limit:
+                    try:
+                        chunk_index, sales_chunk = next(chunk_iterator)
+                    except StopIteration:
+                        break
+
+                    if inspection_sample is None:
+                        inspection_sample = sales_chunk.head(5)
+
+                    future = executor.submit(_prepare_streaming_chunk, sales_chunk, customers_df, returns_df)
+                    running_futures[future] = chunk_index
+
+        sales_by_category = _read_sales_by_category_from_sqlite(aggregate_connection)
+        pivot_source = _read_pivot_source_from_sqlite(aggregate_connection)
+        monthly_df = _read_monthly_from_sqlite(aggregate_connection)
+
+    _safe_unlink(aggregate_db_path)
+
+    if inspection_sample is None:
+        for chunk in _iter_sales_chunks(paths, chunk_size):
+            inspection_sample = chunk.head(5)
+            break
+
+    _write_streaming_inspection_report(inspection_sample, customers_df, returns_df, output_dir)
+
+    if not sales_by_category.empty:
+        sales_by_category = sales_by_category.sort_values(
+            ["category", "total_revenue"], ascending=[True, False]
+        )
+    sales_by_category.to_csv(output_dir / "sales_by_category.csv", index=False)
+
+    if pivot_source.empty:
+        sales_pivot = pd.DataFrame()
+    else:
+        sales_pivot = pd.pivot_table(
+            pivot_source,
+            index="region",
+            columns="segment",
+            values="realized_revenue",
+            aggfunc="sum",
+            fill_value=0,
+        )
+    sales_pivot.to_csv(output_dir / "sales_pivot_region_segment.csv")
+
+    if not monthly_df.empty:
+        monthly_df = monthly_df.sort_values("order_month")
+    _plot_monthly_revenue_from_monthly(monthly_df, output_dir)
+
+    return {
+        "row_count": int(row_count),
+        "total_revenue": float(total_revenue),
+        "output_dir": str(output_dir),
+    }
+
+
+def _prepare_streaming_chunk(
+    sales_chunk: pd.DataFrame,
+    customers_df: pd.DataFrame,
+    returns_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    cleaned_chunk = _clean_sales(sales_chunk)
+    if cleaned_chunk.empty:
+        return cleaned_chunk, cleaned_chunk
+    enriched_chunk = _enrich_sales(cleaned_chunk, customers_df, returns_df)
+    return cleaned_chunk, enriched_chunk
 
 
 def _iter_sales_chunks(paths: dict[str, Path], chunk_size: int):
