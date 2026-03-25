@@ -55,7 +55,11 @@ python -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 python .\main.py
+python .\main.py --stream --chunk-size 2
 python .\examples_main.py
+
+No modo `--stream`, a pipeline lê arquivos `CSV` e `JSONL` por chunks para reduzir uso de memória.
+No modo `--stream`, as agregações incrementais (incluindo `total_orders` distintos) usam uma base SQLite temporária em disco ao invés de manter estruturas grandes em memória.
 
 # abrir no VS Code / Jupyter
 code .\pandas_aula_completa.ipynb

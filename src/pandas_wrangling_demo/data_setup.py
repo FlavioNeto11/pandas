@@ -50,6 +50,7 @@ def bootstrap_demo_environment(base_dir: Path) -> dict[str, Path]:
     sales_jan_path = raw_dir / "sales_jan.csv"
     sales_feb_path = raw_dir / "sales_feb.csv"
     customers_path = raw_dir / "customers.json"
+    customers_jsonl_path = raw_dir / "customers.jsonl"
     database_path = data_dir / "warehouse.db"
 
     if not sales_jan_path.exists():
@@ -61,6 +62,12 @@ def bootstrap_demo_environment(base_dir: Path) -> dict[str, Path]:
     if not customers_path.exists():
         customers_path.write_text(json.dumps(CUSTOMERS, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    if not customers_jsonl_path.exists():
+        customers_jsonl_content = "\n".join(
+            json.dumps(customer, ensure_ascii=False) for customer in CUSTOMERS
+        )
+        customers_jsonl_path.write_text(f"{customers_jsonl_content}\n", encoding="utf-8")
+
     _ensure_returns_database(database_path)
 
     return {
@@ -70,6 +77,7 @@ def bootstrap_demo_environment(base_dir: Path) -> dict[str, Path]:
         "sales_jan_path": sales_jan_path,
         "sales_feb_path": sales_feb_path,
         "customers_path": customers_path,
+        "customers_jsonl_path": customers_jsonl_path,
     }
 
 
