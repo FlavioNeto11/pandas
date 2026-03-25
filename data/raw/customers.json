@@ -1,0 +1,10 @@
+[
+  {"customer_id": 1, "customer_name": "Ana", "segment": "Corporativo", "city": "Sao Paulo"},
+  {"customer_id": 2, "customer_name": "Bruno", "segment": "Varejo", "city": "Curitiba"},
+  {"customer_id": 3, "customer_name": "Carla", "segment": "Corporativo", "city": "Recife"},
+  {"customer_id": 4, "customer_name": "Diego", "segment": "Varejo", "city": "Manaus"},
+  {"customer_id": 5, "customer_name": "Erika", "segment": "Enterprise", "city": "Campinas"},
+  {"customer_id": 6, "customer_name": "Fabio", "segment": "Varejo", "city": "Goiania"},
+  {"customer_id": 7, "customer_name": "Gi", "segment": "Corporativo", "city": "Salvador"},
+  {"customer_id": 8, "customer_name": "Helena", "segment": "Enterprise", "city": "Belo Horizonte"}
+]

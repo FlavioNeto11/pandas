@@ -1,0 +1,6 @@
+order_id,customer_id,product,category,region,order_date,quantity,unit_price,discount
+1006,1,Teclado,Eletronicos,Sudeste,2026-02-02,1,150,0.00
+1007,2,Cadeira,Moveis,Sul,2026-02-06,2,880,0.15
+1008,6,Aspirador,Casa,Centro-Oeste,2026-02-09,1,650,0.07
+1009,7,Mouse,Eletronicos,Nordeste,2026-02-11,3,75,0.02
+1010,8,Notebook,Eletronicos,,2026-02-15,1,3400,0.04

@@ -1,0 +1,7 @@
+order_id,customer_id,product,category,region,order_date,quantity,unit_price,discount
+1001,1,Notebook,Eletronicos,Sudeste,2026-01-05,1,3500,0.05
+1002,2,Mouse,Eletronicos,Sul,2026-01-08,2,80,
+1003,3,Cadeira,Moveis,Nordeste,2026-01-10,1,900,0.10
+1004,4,Luminaria,Casa,Norte,2026-01-12,3,120,0.00
+1005,5,Notebook,Eletronicos,Sudeste,2026-01-12,1,3500,0.05
+1005,5,Notebook,Eletronicos,Sudeste,2026-01-12,1,3500,0.05
